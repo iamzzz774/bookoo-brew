@@ -7,7 +7,7 @@ This is an independent project, not an official BOOKOO application.
 
 ## Set up your own services
 
-1. Deploy and configure your own compatible Brew Guide website over **HTTPS**.
+1. The webpage defaults to `https://coffee.chu3.top/`. You can change it in settings to your own compatible **HTTPS** Brew Guide deployment.
    This repository is the Android shell, not the Brew Guide website/server.
 2. In the phone's **设置**, set **Brew Guide 网址** to that deployment's URL.
    Empty/invalid URLs show a configuration prompt without creating a WebView or
@@ -26,7 +26,7 @@ This is an independent project, not an official BOOKOO application.
 5. Grant the Android Bluetooth permissions when connecting the scale. Release
    other clients' connections if a peripheral is unavailable.
 
-No deployment hostname or Supabase credential is supplied by default. A local
+The original Brew Guide website is the default; no Supabase credential is supplied. A local
 build can optionally seed the webpage URL with `BREW_GUIDE_URL` via a Dart define
 (see below); a compiled-in URL is public to anyone inspecting the APK, not a secret.
 Switching ordinary bottom tabs retains the existing page state and layout.
@@ -107,7 +107,7 @@ scripts/build_apk.sh --no-bump -- --dart-define-from-file=/path/to/private-defin
 ```
 
 Do not put a personal endpoint or secret into committed commands, test fixtures,
-release notes, screenshots or logs. Prefer runtime settings for public builds.
+release notes, screenshots or logs. The default website address is intentionally included; use runtime settings to change it.
 
 ## Original launcher artwork
 

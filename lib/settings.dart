@@ -2,6 +2,11 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'mt80.dart';
 
+const kDefaultBrewGuideUrl = String.fromEnvironment(
+  'BREW_GUIDE_URL',
+  defaultValue: 'https://coffee.chu3.top/',
+);
+
 enum AppThemePreference { system, light, dark }
 
 extension AppThemePreferenceLabel on AppThemePreference {
@@ -14,7 +19,7 @@ extension AppThemePreferenceLabel on AppThemePreference {
 
 /// brew-guide Supabase 凭证，持久化在本地。
 class Settings {
-  String brewGuideUrl = const String.fromEnvironment('BREW_GUIDE_URL');
+  String brewGuideUrl = kDefaultBrewGuideUrl;
   String supabaseUrl = '';
   String supabaseKey = '';
   String userId = 'default_user';
@@ -88,9 +93,8 @@ class Settings {
   static Future<Settings> load() async {
     final p = await SharedPreferences.getInstance();
     final s = Settings();
-    s.brewGuideUrl =
-        p.getString('brewGuideUrl') ??
-        const String.fromEnvironment('BREW_GUIDE_URL');
+    s.brewGuideUrl = p.getString('brewGuideUrl') ?? kDefaultBrewGuideUrl;
+    if (s.brewGuideUrl.trim().isEmpty) s.brewGuideUrl = kDefaultBrewGuideUrl;
     s.supabaseUrl = p.getString('supabaseUrl') ?? '';
     s.supabaseKey = p.getString('supabaseKey') ?? '';
     s.userId = p.getString('userId') ?? 'default_user';

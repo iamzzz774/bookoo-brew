@@ -4,11 +4,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   test(
+    'empty saved webpage falls back to original website without changing Supabase',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'brewGuideUrl': '',
+        'supabaseUrl': 'https://example.supabase.co',
+      });
+      final s = await Settings.load();
+      expect(s.brewGuideUrl, kDefaultBrewGuideUrl);
+      expect(s.supabaseUrl, 'https://example.supabase.co');
+    },
+  );
+  test(
     'Brew Guide URL is private user configuration, separate from Supabase',
     () async {
       SharedPreferences.setMockInitialValues({});
       final s = await Settings.load();
-      expect(s.brewGuideUrl, isEmpty);
+      expect(s.brewGuideUrl, 'https://coffee.chu3.top/');
       s.brewGuideUrl = 'https://brew.example.test/';
       await s.save();
       final again = await Settings.load();
