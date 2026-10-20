@@ -109,28 +109,20 @@ scripts/build_apk.sh --no-bump -- --dart-define-from-file=/path/to/private-defin
 Do not put a personal endpoint or secret into committed commands, test fixtures,
 release notes, screenshots or logs. The default website address is intentionally included; use runtime settings to change it.
 
-## Original launcher artwork
-
-The geometric cup/steam/scale launcher artwork is original project artwork,
-rendered by `scripts/render_icon.py`; it does not use an external icon or BOOKOO
-logo. To regenerate the five density-specific PNGs, install Pillow in your local
-Python tooling environment and run `python3 scripts/render_icon.py`. Pillow is
-only an optional artwork-development tool, not an Android runtime dependency.
-
 ## Backend and companion trust boundary
 
 The native app uses the client key supplied in settings; `User ID` is a data
 selection field, **not authentication or access control**. This shell does not
 implement a user login flow. Review your backend policies before sharing a
 project with other users; never substitute a service-role key to bypass RLS.
-Optional companion discovery uses short-lived Realtime broadcasts in that same
-configured project/user scope, not database notes or an extra LAN endpoint.
-A desktop must explicitly enable cooperation and acknowledge peripheral release;
-absence of an enabled companion leaves ordinary standalone phone operation.
-This discovery protocol does not add independent user authentication: only enable
-a desktop companion in a backend/project you control and trust, not an untrusted
-multi-tenant channel. No personal desktop, machine address or additional pairing
-secret is built in.
+The phone has no Mac discovery, handoff request, Realtime coordination channel,
+or Mac-release wait. It connects directly to its Bluetooth peripherals. Existing
+Brew Guide/Supabase network access is for the webpage and brewing data only.
+The optional personal Mac recorder follows GG reachability on the Mac itself;
+it is not part of the phone application and does not require phone-to-Mac
+communication, Tailscale configuration or pairing codes. Other users do not need
+a Mac, GG machine or hydration program. A machine left on during pour-over is a
+manual-pause exception for the Mac recorder, not a phone setup requirement.
 
 ## Embedded WebView boundaries
 

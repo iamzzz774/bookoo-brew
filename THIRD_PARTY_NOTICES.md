@@ -4,12 +4,10 @@ The root MIT license covers this project's original first-party code only.
 Third-party components retain their own copyright and license terms. No trademark
 rights, endorsement, or ownership of BOOKOO hardware/software is implied.
 
-## Original launcher artwork
+## Launcher resources
 
-The launcher cup/steam/scale shapes are first-party artwork generated from
-`scripts/render_icon.py`, covered by this project's MIT license. They are not an
-official BOOKOO logo. Pillow is optional local rendering tooling, not bundled in
-the Android application.
+The existing project launcher resources are preserved. The build does not
+regenerate or replace them. No new artwork-provenance claim is made here.
 
 ## BOOKOO protocol reference
 

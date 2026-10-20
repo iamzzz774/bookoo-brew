@@ -4,6 +4,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'disconnected grinder shows status with no reconnect text or button',
+    (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(body: Mt80GrindPanel(connectionStatus: 'MT80 未连接')),
+        ),
+      );
+      expect(find.byIcon(Icons.bluetooth), findsOneWidget);
+      expect(find.byIcon(Icons.bluetooth_searching), findsNothing);
+      expect(find.byIcon(Icons.refresh), findsNothing);
+      expect(find.byType(IconButton), findsNothing);
+      expect(find.textContaining('点击重连'), findsNothing);
+      expect(find.text('MT80 未连接'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
   testWidgets('idle panel shows only connection state, not permanent help', (
     tester,
   ) async {
@@ -51,18 +68,18 @@ void main() {
               feedingRpm: 25,
               grindRpm: 800,
             ),
-            connectionStatus: 'MT80 未连接 · 点击重连',
+            connectionStatus: 'MT80 未连接',
             currentParameters: '研磨度 200 μm · 下豆速度 65 rpm · 刀盘转速 1200 rpm',
           ),
         ),
       ),
     );
-    expect(find.text('MT80 未连接 · 点击重连'), findsOneWidget);
+    expect(find.text('MT80 未连接'), findsOneWidget);
     expect(find.textContaining('μm'), findsNothing);
     expect(find.textContaining('rpm'), findsNothing);
   });
   testWidgets(
-    'confirmation stays actionable even while reconnect is available',
+    'candidate selection stays actionable without reconnect controls',
     (tester) async {
       var selected = false;
       await tester.pumpWidget(
@@ -71,7 +88,6 @@ void main() {
             body: Mt80GrindPanel(
               result: const Mt80Result(status: 'needs_confirmation'),
               onChoose: () => selected = true,
-              onConnect: () {},
             ),
           ),
         ),

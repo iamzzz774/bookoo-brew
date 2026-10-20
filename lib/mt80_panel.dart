@@ -5,16 +5,14 @@ class Mt80GrindPanel extends StatelessWidget {
   final Mt80Result result;
   final bool loading;
   final bool connected;
-  final VoidCallback? onRefresh, onChoose, onConnect;
+  final VoidCallback? onChoose;
   final String? connectionStatus, currentParameters;
   const Mt80GrindPanel({
     super.key,
     this.result = const Mt80Result(),
     this.loading = false,
     this.connected = false,
-    this.onRefresh,
     this.onChoose,
-    this.onConnect,
     this.connectionStatus,
     this.currentParameters,
   });
@@ -68,19 +66,7 @@ class Mt80GrindPanel extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             else if (result.status == 'needs_confirmation' && onChoose != null)
-              TextButton(onPressed: onChoose, child: const Text('选择'))
-            else if (onConnect != null)
-              IconButton(
-                onPressed: onConnect,
-                tooltip: '重连磨豆机',
-                icon: const Icon(Icons.bluetooth_searching, size: 21),
-              )
-            else if (onRefresh != null)
-              IconButton(
-                onPressed: onRefresh,
-                tooltip: '刷新本杯研磨参数',
-                icon: const Icon(Icons.refresh, size: 21),
-              ),
+              TextButton(onPressed: onChoose, child: const Text('选择')),
           ],
         ),
       ),

@@ -79,7 +79,7 @@ class Mt80Ble extends ChangeNotifier {
         cancelled: () => !_current(g),
       );
       if (!_current(g)) return;
-      if (devices.isEmpty) throw StateError('MT80 未连接 · 点击重连');
+      if (devices.isEmpty) throw StateError('MT80 未连接');
       if (devices.length != 1) throw StateError('发现多台 MT80，请仅开启目标磨豆机后重试');
       final device = devices.single;
       attemptDevice = device;
@@ -89,7 +89,7 @@ class Mt80Ble extends ChangeNotifier {
         if (_current(g) &&
             state == BluetoothConnectionState.disconnected &&
             _ready) {
-          unawaited(_failed('MT80 未连接 · 点击重连', g));
+          unawaited(_failed('MT80 未连接', g));
         }
       });
       await device.connect(timeout: const Duration(seconds: 12));

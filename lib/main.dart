@@ -15,7 +15,6 @@ import 'mt80_panel.dart';
 import 'mt80_ble.dart';
 import 'mt80_phone_store.dart';
 import 'mt80_snapshot.dart';
-import 'device_coordination.dart';
 
 void main() => runApp(const BookooBrewApp());
 
@@ -749,9 +748,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  final coordination = DeviceCoordination();
   bool _foreground = true, _cupFinished = false, _starting = false;
-  bool _handoffBlocked = false;
+  bool _disconnectIncomplete = false;
   int _deviceEpoch = 0;
   Future<void>? _openingDevices;
   Future<void> _deviceLane = Future.value();
@@ -818,7 +816,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _closeDevices().whenComplete(() async {
         phoneGrinder.dispose();
         await ble.dispose();
-        await coordination.dispose();
       }),
     );
     unawaited(WakelockPlus.disable());
@@ -883,7 +880,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _deviceEpoch++;
     final opening = _openingDevices;
     final done = _deviceLane.then((_) async {
-      _handoffBlocked = true;
+      _disconnectIncomplete = true;
       try {
         await phoneGrinder.releaseConnection();
         await ble.releaseConnection();
@@ -894,17 +891,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             throw StateError("设备连接尚未退出");
           } catch (_) {}
         }
-        // Only actual native disconnection permits the Mac to resume.
-        await coordination.release();
-        _handoffBlocked = false;
+        _disconnectIncomplete = false;
       } catch (_) {
-        if (mounted) _snack('设备交接未完成，Mac 保持让位');
+        if (mounted) _snack('蓝牙连接尚未完全释放');
       }
       if (mounted) {
         setState(() {
           connected = false;
-          status = _handoffBlocked ? '设备交接待恢复' : '未连接';
-          statusHint = _handoffBlocked ? '确认设备已断开后点击重试' : null;
+          status = _disconnectIncomplete ? '蓝牙连接待释放' : '未连接';
+          statusHint = _disconnectIncomplete ? '请等待设备连接退出后重新进入萃取页' : null;
         });
       }
     });
@@ -922,9 +917,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (mounted && _wantDevices && !connected) await _connect();
       return;
     }
-    if (_handoffBlocked) {
+    if (_disconnectIncomplete) {
       await _closeDevices();
-      if (_handoffBlocked || !mounted || !_wantDevices) return;
+      if (_disconnectIncomplete || !mounted || !_wantDevices) return;
     }
     return _openingDevices = _openDevices().whenComplete(
       () => _openingDevices = null,
@@ -940,17 +935,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       statusHint = null;
     });
     try {
-      if (settings.isConfigured && !ctrl.capturing) {
-        await coordination.acquire(
-          baseUrl: settings.supabaseUrl,
-          key: settings.supabaseKey,
-          userId: settings.userId,
-          resources: {
-            'scale',
-            if (settings.mt80Enabled && isMt80(selectedGrinder)) 'grinder',
-          },
-        );
-      }
       if (!mounted || !_wantDevices || epoch != _deviceEpoch) return;
       final wantedGrinder = settings.mt80Enabled && isMt80(selectedGrinder);
       final grinder = () async {
@@ -1415,7 +1399,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             children: [
               InkWell(
-                onTap: connected ? null : _connect,
                 onLongPress: connected ? () => ble.disconnect() : null,
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
@@ -1436,7 +1419,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              connected ? status : '$status · 点击重连',
+                              status,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -1554,12 +1537,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     !phoneGrinder.ready || phoneGrinder.sample == null
                     ? null
                     : '研磨度 ${phoneGrinder.sample!.bladeGap} μm · 下豆速度 ${phoneGrinder.sample!.feedingRpm} rpm · 刀盘转速 ${phoneGrinder.sample!.grindRpm} rpm',
-                onConnect: phoneGrinder.ready
-                    ? null
-                    : () => unawaited(_connect()),
-                onRefresh: mt80.noteId == null
-                    ? null
-                    : () => _refreshMt80(reportErrors: true),
                 onChoose: mt80.candidates.isEmpty ? null : _chooseMt80,
               ),
             ),
