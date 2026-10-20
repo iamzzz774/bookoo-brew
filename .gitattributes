@@ -1,0 +1,13 @@
+* text=auto
+
+*.dart text eol=lf
+*.gradle text eol=lf
+*.kts text eol=lf
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+*.bat text eol=crlf
+
+# Preserve upstream license texts verbatim, including original whitespace.
+licenses/** -whitespace

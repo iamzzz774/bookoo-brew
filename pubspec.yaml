@@ -1,0 +1,26 @@
+name: bookoo_brew
+description: BOOKOO 手冲秤 → brew-guide 记录 App（BLE 连秤 + Supabase 选豆/入库）
+publish_to: 'none'
+version: 1.0.33+76
+
+environment:
+  sdk: '>=3.11.0 <4.0.0'
+  flutter: '>=3.41.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_blue_plus: ^1.32.12
+  permission_handler: ^11.3.1
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
+  wakelock_plus: ^1.7.0
+  webview_flutter: ^4.14.1
+  webview_flutter_android: ^4.13.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
