@@ -1,162 +1,132 @@
 # BOOKOO Brew
 
-Standalone Flutter Android app for pour-over recording with a BOOKOO Bluetooth
-scale, optional BOOKOO MT80 grinder recording, and your own Brew Guide/Supabase
-setup. A Mac, desktop broker, pairing code or model service is **not required**.
-This is an independent project, not an official BOOKOO application.
+一款面向 Android 的手冲记录应用：通过蓝牙连接 BOOKOO 咖啡秤，记录重量、流速和冲煮曲线；可选连接 BOOKOO MT80 磨豆机，保存研磨参数，并与 Brew Guide 的咖啡豆、笔记和库存数据配合使用。
 
-## Set up your own services
+手机可以独立于 Mac 使用，**不需要 Mac、GG 咖啡机、Tailscale 或配对码**。独立不等于完全离线：网页及云端选豆、笔记和库存同步仍需要相应的网络与服务配置。
 
-1. The webpage defaults to `https://coffee.chu3.top/`. You can change it in settings to your own compatible **HTTPS** Brew Guide deployment.
-   This repository is the Android shell, not the Brew Guide website/server.
-2. In the phone's **设置**, set **Brew Guide 网址** to that deployment's URL.
-   Empty/invalid URLs show a configuration prompt without creating a WebView or
-   sending a request. Only the configured HTTPS origin (host and effective port)
-   is trusted; redirects/navigation to other origins are blocked. A different
-   path on the same origin is allowed. Use a direct URL, not an HTTP redirect.
-3. Configure the native tab's Supabase URL and client/publishable key for your
-   own compatible Brew Guide schema, authentication and row-level policies.
-   Never embed a service-role/admin key in an APK, repository or WebView.
-   This app does not provision a database, migrate a schema or bypass RLS.
-4. Configure/login to Brew Guide **inside the website separately**. Native
-   Supabase settings do not automatically configure the website. The embedded
-   WebView retains its own cookies/localStorage/IndexedDB, separate from the
-   native settings and from a standalone browser. Changing URL does not erase
-   either site's stored data; it retires the old page and its pending downloads.
-5. Grant the Android Bluetooth permissions when connecting the scale. Release
-   other clients' connections if a peripheral is unavailable.
+本项目为独立开发的应用，并非 BOOKOO 官方应用。
 
-The original Brew Guide website is the default; no Supabase credential is supplied. A local
-build can optionally seed the webpage URL with `BREW_GUIDE_URL` via a Dart define
-(see below); a compiled-in URL is public to anyone inspecting the APK, not a secret.
-Switching ordinary bottom tabs retains the existing page state and layout.
+## 相关项目
 
-## Optional MT80
+- **Brew Guide 源码项目**：[chuthree/brew-guide](https://github.com/chuthree/brew-guide)
+- **Brew Guide 项目介绍**：<https://chu3.top/brewguide>
+- **应用默认打开的 Brew Guide 网页**：<https://coffee.chu3.top/>
 
-Enable **BOOKOO MT80** in settings only if you use that grinder; leave the option
-off for a scale-only phone. The phone manages the scale and grinder independently.
-There is **no Mac coordination toggle on the phone**. Desktop workflows, if used
-separately, are not a prerequisite for recording or saving on the phone.
+Brew Guide 提供豆仓管理、冲煮辅助及品鉴记录等功能。本仓库包含 Android 应用、蓝牙采集及相关集成代码，**不包含 Brew Guide 网页或服务器源码**；网页部分通过 WebView 远程加载。
 
-A complete locally observed IDLE → GRINDING → IDLE episode is preferred at note
-save. Otherwise fresh current settings can be saved as a settings snapshot, not
-invented grind history. Missing, stale or disconnected readings stay empty.
-Snapshots do not claim a grind duration or recovered past event. No Android
-background/screen-off capture guarantee is made. Grinder values are the reported
-setting in μm and speeds in rpm, not measured particle size. The app's MT80 writes
-are limited to the appHello handshake; no start/stop, cleaning or preset control
-is exposed. Consult the official BOOKOO protocol documentation for compatible
-hardware/firmware. Native brew notes, real curves and inventory sync remain the
-recording workflow; there is no recommendation/model service requirement.
+## 下载与安装
 
-## Build prerequisites
+前往 **[Releases 下载最新 APK](https://github.com/iamzzz774/bookoo-brew/releases/latest)**。
 
-- Flutter/Dart compatible with `pubspec.yaml` (Flutter >= 3.41, Dart >= 3.11).
-- Android SDK/build tools and the JDK required by the checked-in Android Gradle
-  project. Use `flutter doctor -v` to check your machine.
-- **Node.js on PATH** for `test/embedded_layout_test.dart` (executes real page
-  scripts using Node's built-in `node:assert/strict` and `node:vm`; no npm install).
-- Keep `pubspec.lock`; run `flutter pub get` to resolve its pinned packages.
+- 当前安装包面向 **ARM64 Android 设备**。
+- 已安装旧版时直接覆盖安装，**不要先卸载或清除应用数据**。
+- 本仓库未提供个人云端账户、Supabase 凭据或签名私钥，需要使用自己的服务配置。
+- 当前仓库为私有仓库，下载需要具有相应的 GitHub 访问权限。
 
-A clean checkout can build debug **without private signing files**:
+## 主要功能
+
+- 通过 BOOKOO 蓝牙秤记录实时重量、流速及冲煮曲线。
+- 配合 Brew Guide 管理咖啡豆、冲煮笔记、库存和统计。
+- 可选开启 BOOKOO MT80，记录研磨度、下豆速度和刀盘转速。
+- 保留手动选择磨豆机及填写研磨度的方式。
+- 手机直接连接外设，不执行 Mac 发现、交接请求或等待 Mac 释放的网络流程。
+- 应用专注采集和记录，不提供 AI 推荐、磨豆机预设下发或电机控制。
+
+## 首次设置
+
+### 1. Brew Guide 网页
+
+默认网址是 `https://coffee.chu3.top/`，可在应用设置的 **「Brew Guide 网址」** 中修改为兼容的 HTTPS 部署地址。已保存的自定义网址不会被默认值覆盖。
+
+网页的设置、登录状态与原生界面的 Supabase 设置彼此独立；填写原生连接信息不会自动配置网页。WebView 保留自己的 Cookie、localStorage 和 IndexedDB，与独立浏览器的数据并不共用。
+
+### 2. 原生数据连接
+
+在设置中填写你有权访问的 Supabase 项目地址、客户端／可发布密钥及相应用户标识，并确认数据库结构与 Brew Guide 兼容。
+
+- `User ID` 只是数据筛选字段，**不是身份认证或访问控制**。
+- 本应用不提供原生用户登录流程，也不会创建数据库、迁移表结构或绕过 RLS。
+- 请正确配置后端权限；不要把 `service-role` 或管理员密钥填入应用、提交到仓库或编译进 APK。
+
+### 3. 蓝牙设备
+
+按系统提示授予所需蓝牙权限，然后进入萃取界面连接咖啡秤。如果外设不可用，请先检查是否被其他手机应用或电脑占用。
+
+秤与磨豆机使用独立的连接及通知流程。关闭其中一种设备的功能，不应断开另一种设备。
+
+## BOOKOO MT80（可选）
+
+在设置中开启 **「使用 MT80」** 后，手机会尝试直接连接磨豆机；不使用 MT80 时保持关闭，继续使用手动磨豆机选项。
+
+参数名称与单位：
+
+- **研磨度**：`μm`，保留设备报告的原始设定值，不换算成其他磨豆机的刻度。
+- **下豆速度**：`rpm`。
+- **刀盘转速**：`rpm`。
+
+保存笔记时，优先关联手机实际观测到的完整 **空闲 → 研磨 → 空闲** 事件。如果没有完整过程，但存在新鲜、可读取的当前参数，则自动保存为**当前参数快照**，不弹出额外确认。
+
+完整事件与快照会保留不同的来源及状态。快照不声称恢复了历史磨豆过程，也不伪造磨豆开始、结束或时长；缺失、陈旧或断连的数据留空，不用旧缓存补数。显示的是设备设定值，并非实际咖啡粉粒径测量结果。
+
+MT80 的设备写入仅用于 `appHello` 握手，不提供启动、停止、清粉、修改参数或预设控制入口。当前采集以应用前台活动为基础，**不保证切后台、熄屏或杀进程后持续采集**。
+
+## 网页与数据边界
+
+- WebView 仅信任当前配置的 **HTTPS 域名及有效端口**，当前实现会拦截跨来源导航；第三方登录或外链可能因此受限。
+- 相机、文件选择及下载桥接均有页面来源与生命周期限制。插件提供的是顶层页面 URL，不能据此保证每个 iframe 的来源；请使用可信的网页部署。
+- 修改网址不会清除原站点已保存的数据，但会使旧页面及其待处理下载失效。
+- 当前版本关闭 Android 系统备份。换机前请核对云同步或导出记录，不要依赖系统自动恢复；升级时请直接覆盖安装。
+
+## 开发与构建
+
+### 环境准备
+
+- 使用与 `pubspec.yaml` 兼容的 Flutter／Dart。
+- 安装 Android SDK、构建工具及项目 Gradle 所需的 JDK，可用 `flutter doctor -v` 检查。
+- 测试需要 PATH 中存在 **Node.js**，用于执行内嵌网页脚本测试，无需安装 npm 依赖。
+- 保留 `pubspec.lock`，按锁定版本解析依赖。
+
+### 检查与调试构建
 
 ```sh
 flutter pub get
-flutter build apk --debug
 flutter analyze
 flutter test
+flutter build apk --debug
 ```
 
-### Release signing
+干净的源码仓库可在没有个人签名文件的情况下构建调试版。
 
-Use **your own existing** `android/key.properties` and private keystore. Its
-properties are `storeFile`, `storePassword`, `keyAlias`, `keyPassword`;
-`storeFile` is resolved relative to the Android project root unless absolute.
-Keep both files private and backed up. Never replace a deployed application's
-signer just to make a build succeed: Android updates require the same identity.
-The build script does not generate, replace, migrate or print private keys.
+### 正式签名构建
+
+使用自己的 `android/key.properties` 和私有 keystore。配置字段为 `storeFile`、`storePassword`、`keyAlias`、`keyPassword`；相对 `storeFile` 按 Android 项目根目录解析。
+
+```sh
+flutter build apk --release --target-platform android-arm64
+```
+
+不要提交签名文件或密码，也不要为了构建成功而更换已发布应用的签名，否则无法直接覆盖升级。
+
+项目也提供构建包装脚本：
 
 ```sh
 scripts/build_apk.sh --no-bump
 ```
 
-Without `key.properties`, a release fails with an actionable error rather than
-silently changing signer or producing an unsigned distribution. For **local
-experiments only**, explicitly permit the standard Android debug-key fallback:
+**注意：包装脚本默认会自动升版，并清理旧安装包、只保留最近三份。`--no-bump` 仅关闭自动升版，不关闭清理。** 若需保留全部旧包，请使用上面的直接 Flutter 构建命令。
+
+没有正式签名文件时，正式构建会报错，而不是静默换签名。仅做本地实验时，可显式选择调试签名回退：
 
 ```sh
 scripts/build_apk.sh --no-bump --debug-signing
-# Equivalent direct build (only when no private key.properties exists):
-ORG_GRADLE_PROJECT_bookooAllowDebugSigning=true flutter build apk --release
 ```
 
-An existing `key.properties` **always wins**, even with the fallback flag. Debug
-fallback builds are not production releases and cannot update an installation
-signed with somebody else's key. The same application ID also means debug and
-release builds are not automatically side-by-side installations.
+已有 `key.properties` 时仍优先使用其中的正式签名。调试签名包不能覆盖由其他签名签署的安装版本，同一应用 ID 也不代表调试版与正式版可以并存。
 
-The script defaults to bumping patch and build number, copies the result to
-`build/apk/bookoo_brew-v<version>+<build>.apk`, and retains three recent copies.
-`--no-bump`, `--bump build|minor|major|patch`, `--dry-run`, and `--prune-only` are
-available. Dry-run does not write the version or start a build.
+如需在构建时指定其他网页默认值，可通过 `BREW_GUIDE_URL` 的 Dart define 配置；配置文件应保存在仓库之外。编译进 APK 的网址是可见信息，不应包含密钥。
 
-For a private local URL seed, keep a Dart-define JSON file **outside the export**:
+## 许可证与第三方说明
 
-```sh
-scripts/build_apk.sh --no-bump -- --dart-define-from-file=/path/to/private-defines.json
-```
+仓库现有许可证见 [LICENSE](LICENSE)，第三方协议、依赖及归属说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `licenses/`。
 
-Do not put a personal endpoint or secret into committed commands, test fixtures,
-release notes, screenshots or logs. The default website address is intentionally included; use runtime settings to change it.
-
-## Backend and companion trust boundary
-
-The native app uses the client key supplied in settings; `User ID` is a data
-selection field, **not authentication or access control**. This shell does not
-implement a user login flow. Review your backend policies before sharing a
-project with other users; never substitute a service-role key to bypass RLS.
-The phone has no Mac discovery, handoff request, Realtime coordination channel,
-or Mac-release wait. It connects directly to its Bluetooth peripherals. Existing
-Brew Guide/Supabase network access is for the webpage and brewing data only.
-The optional personal Mac recorder follows GG reachability on the Mac itself;
-it is not part of the phone application and does not require phone-to-Mac
-communication, Tailscale configuration or pairing codes. Other users do not need
-a Mac, GG machine or hydration program. A machine left on during pour-over is a
-manual-pause exception for the Mac recorder, not a phone setup requirement.
-
-## Embedded WebView boundaries
-
-The configured HTTPS host **and effective port** form the trust boundary (443 is
-the HTTPS default). Page scripts recheck that origin at execution time and only
-install in the top frame. Camera and file-picker requests require the current
-trusted page, and camera is the only granted web permission. Native download
-messages additionally require an unguessable per-document capability issued only
-to that top-frame script. Navigation or URL changes invalidate pending assembled
-downloads; stale controller callbacks cannot affect the new page.
-
-The pinned WebView plugin exposes the current page URL, but does **not** expose
-the initiating frame origin for its camera/file-selector callbacks. Therefore
-those two checks are a **top-level origin policy**, not proof of an individual
-iframe's origin. Deploy only a Brew Guide site you control, avoid untrusted
-embedded frames, and serve a restrictive Permissions-Policy/CSP (camera limited
-to self, frame-src limited to self). A hostile script served by your configured
-origin is trusted code; the shell cannot make that site trustworthy.
-
-## Licenses and public export
-
-Original first-party code is MIT: see [LICENSE](LICENSE). Preserved BOOKOO
-upstream attribution, exact pinned pub-package license texts and SDK license
-texts are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and `licenses/`.
-The package inventory includes development/non-Android dependencies; it is not a
-claim that all are shipped. Native Maven/engine notices require separate
-release-graph review, as described in the notices file.
-
-Export a reviewed **source allowlist into a fresh history**, not the entire local
-working directory or its old `.git/`. Exclude signing files, `local.properties`,
-`.dart_tool/`, build outputs (including `android/build/`), private environment/
-define files, captures, exported notes and diagnostic logs. `.gitignore` is a
-safety net, not a secret scanner and not a way to erase existing Git history.
-Before publication, inspect the actual source snapshot and binary separately
-for personal URLs/keys, verify the release signature, and complete native
-third-party attribution review. Never publish private database records or key
-material as test data.
+上游许可证原文应保留。Dart 依赖清单不等于 APK 全部原生组件的归属清单；Flutter 引擎、原生依赖等仍需按实际发布构建核对。源码和安装包发布前应分别检查，不提交个人数据、云凭据、签名文件、设备地址或诊断日志。
