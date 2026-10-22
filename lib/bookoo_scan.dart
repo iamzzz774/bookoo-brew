@@ -3,12 +3,24 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'shared_scan.dart';
 
 /// The adapter's scan is global; device connections are independent.
-/// Only the current scan lease may start/stop scanning. Disposing one device
+/// Concurrent roles share one full discovery window. Disposing one device
 /// cannot stop another device's scan or disconnect its GATT connection.
 class BookooScan {
-  static Future<void> _tail = Future.value();
+  static final _shared = SharedScan<ScanResult>(
+    // onScanResults deliberately excludes results replayed from an older scan.
+    results: () => FlutterBluePlus.onScanResults,
+    start: (timeout) => FlutterBluePlus.startScan(timeout: timeout),
+    stop: () => FlutterBluePlus.stopScan(),
+    keyOf: (result) => '${result.device.remoteId.str}|${_name(result)}',
+  );
+
+  static String _name(ScanResult result) =>
+      result.advertisementData.advName.isNotEmpty
+      ? result.advertisementData.advName
+      : result.device.platformName;
   static Future<bool>? _permissions;
 
   static Future<bool> permissions() => _permissions ??= _requestPermissions();
@@ -47,33 +59,15 @@ class BookooScan {
     Duration timeout = const Duration(seconds: 10),
     bool Function()? cancelled,
   }) async {
-    final previous = _tail;
-    final release = Completer<void>();
-    _tail = release.future;
-    await previous;
-    StreamSubscription<List<ScanResult>>? subscription;
-    try {
-      if (cancelled?.call() == true) throw StateError('连接已取消');
-      final found = <String, BluetoothDevice>{};
-      subscription = FlutterBluePlus.scanResults.listen((results) {
-        for (final r in results) {
-          // advName is available even before platformName's cache is populated.
-          final name = r.advertisementData.advName.isNotEmpty
-              ? r.advertisementData.advName
-              : r.device.platformName;
-          if (accepts(name)) found[r.device.remoteId.str] = r.device;
-        }
-      });
-      await FlutterBluePlus.startScan(timeout: timeout);
-      await Future<void>.delayed(timeout);
-      if (cancelled?.call() == true) throw StateError('连接已取消');
-      return found.values.toList();
-    } finally {
-      await subscription?.cancel();
-      try {
-        await FlutterBluePlus.stopScan();
-      } catch (_) {}
-      release.complete();
-    }
+    final results = await _shared.find(
+      (result) => accepts(_name(result)),
+      timeout: timeout,
+      cancelled: cancelled,
+    );
+    // A device may advertise with an initially empty name then a real name;
+    // preserve the named observation without duplicating the same device.
+    return {
+      for (final result in results) result.device.remoteId.str: result.device,
+    }.values.toList();
   }
 }
