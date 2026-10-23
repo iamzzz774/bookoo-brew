@@ -742,19 +742,32 @@ class _LiveBrewChartPainter extends CustomPainter {
 class HomeScreen extends StatefulWidget {
   final ValueChanged<AppThemePreference>? onThemePreferenceChanged;
 
-  const HomeScreen({super.key, this.onThemePreferenceChanged});
+  // Optional dependencies let lifecycle regressions run without hardware/cloud.
+  final BookooBle? scale;
+  final Mt80Ble? grinder;
+  final BrewController? controller;
+  final BrewGuideApi? api;
+
+  const HomeScreen({
+    super.key,
+    this.onThemePreferenceChanged,
+    this.scale,
+    this.grinder,
+    this.controller,
+    this.api,
+  });
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
-  bool _foreground = true, _cupFinished = false, _starting = false;
+  bool _foreground = true, _starting = false;
   bool _disconnectIncomplete = false;
   int _deviceEpoch = 0;
   Future<void>? _openingDevices;
   Future<void> _deviceLane = Future.value();
-  final ble = BookooBle();
-  late final BrewController ctrl = BrewController(ble);
+  late final ble = widget.scale ?? BookooBle();
+  late final BrewController ctrl = widget.controller ?? BrewController(ble);
   late final StreamSubscription<bool> connectionSubscription;
   final brewGuideWebKey = GlobalKey<BrewGuideWebPaneState>();
   Settings settings = Settings();
@@ -773,13 +786,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   double grindSetting = 5.0;
   Mt80Result mt80 = const Mt80Result();
   bool mt80Loading = false;
-  late final Mt80Ble phoneGrinder = Mt80Ble(
-    currentBeanId: () => selectedBean?.id,
-  );
+  late final Mt80Ble phoneGrinder =
+      widget.grinder ?? Mt80Ble(currentBeanId: () => selectedBean?.id);
   Mt80PhoneStore? phoneGrinds;
   StreamSubscription? _phoneGrindEvents;
   String? _phoneStoreError;
-  bool _saving = false;
+  bool _saving = false, _reviewingStop = false;
   int _mt80Generation = 0;
   Timer? _mt80Poll;
 
@@ -859,10 +871,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (selectedSection == 1 && _foreground) unawaited(_connect());
   }
 
-  bool get _keepDeviceSession => ctrl.capturing || _saving || _starting;
+  bool get _keepDeviceSession =>
+      ctrl.capturing || _saving || _starting || _reviewingStop;
   bool get _wantDevices =>
-      !_cupFinished &&
-      (_keepDeviceSession || (selectedSection == 1 && _foreground));
+      _keepDeviceSession || (selectedSection == 1 && _foreground);
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -909,7 +921,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _connect() async {
     if (!mounted || selectedSection != 1 || !_foreground) return;
-    _cupFinished = false;
     final pending = _openingDevices;
     if (pending != null) {
       await pending;
@@ -955,13 +966,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  BrewGuideApi? get _api => settings.isConfigured
-      ? BrewGuideApi(
-          baseUrl: settings.supabaseUrl,
-          key: settings.supabaseKey,
-          userId: settings.userId,
-        )
-      : null;
+  BrewGuideApi? get _api =>
+      widget.api ??
+      (settings.isConfigured
+          ? BrewGuideApi(
+              baseUrl: settings.supabaseUrl,
+              key: settings.supabaseKey,
+              userId: settings.userId,
+            )
+          : null);
 
   Future<void> _loadBeans() async {
     final api = _api;
@@ -1132,7 +1145,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _start() async {
-    if (_saving || _starting || ctrl.capturing) return;
+    if (_saving || _reviewingStop || _starting || ctrl.capturing) return;
     _starting = true;
     try {
       if (!connected) await _connect();
@@ -1156,8 +1169,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _stop() async {
-    if (_saving) return;
+  Future<void> _resolveShortStop(String choice) async {
+    if (!_reviewingStop || _saving) return;
+    if (choice == 'continue') {
+      setState(() => _reviewingStop = false);
+      return;
+    }
+    if (choice == 'save') {
+      setState(() => _reviewingStop = false);
+      await _stop(shortCupConfirmed: true);
+      return;
+    }
+    if (choice != 'discard') return;
+    setState(() => _saving = true);
+    try {
+      await ctrl.discard();
+      await WakelockPlus.disable();
+      if (mounted) setState(() => _reviewingStop = false);
+    } catch (e) {
+      if (mounted) _snack('结束未完成：$e');
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+        if (!_wantDevices) unawaited(_closeDevices());
+      }
+    }
+  }
+
+  Future<void> _stop({bool shortCupConfirmed = false}) async {
+    if (_saving || _reviewingStop || !ctrl.capturing) return;
+    if (!shortCupConfirmed && ctrl.needsEarlyStopConfirmation) {
+      setState(() => _reviewingStop = true);
+      return;
+    }
     final api = _api;
     if (api == null) {
       _snack('先在设置里填 Supabase 凭证');
@@ -1192,8 +1236,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await settings.save();
       if (!mounted) return;
       _snack(res);
-      _cupFinished = true;
-      await _closeDevices();
+      // A saved cup ends recording, not the foreground device session.
+      // Keep both live streams for the next cup; finally still releases them
+      // when this idle page is no longer foreground/selected.
       if (isMt80(selectedGrinder) && ctrl.lastSavedNoteId != null) {
         setState(
           () => mt80 = Mt80Result(noteId: ctrl.lastSavedNoteId, status: 'idle'),
@@ -1257,7 +1302,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
     if (_keepDeviceSession) return;
     if (selectedSection == 1 && _foreground) {
-      _cupFinished = false;
       unawaited(_closeDevices().then((_) => _connect()));
     } else {
       unawaited(_closeDevices());
@@ -1274,7 +1318,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
     if (_keepDeviceSession) return;
     if (selectedSection == 1 && _foreground) {
-      _cupFinished = false;
       unawaited(_closeDevices().then((_) => _connect()));
     } else {
       unawaited(_closeDevices());
@@ -2268,7 +2311,46 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       SizedBox(
         height: 44,
         width: double.infinity,
-        child: ctrl.capturing
+        child: _reviewingStop
+            ? Row(
+                children: [
+                  Expanded(
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.black,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: _saving
+                          ? null
+                          : () => _resolveShortStop('continue'),
+                      child: const Text('继续'),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: _saving
+                          ? null
+                          : () => _resolveShortStop('discard'),
+                      child: const Text('放弃'),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _saving
+                          ? null
+                          : () => _resolveShortStop('save'),
+                      child: const Text('保存'),
+                    ),
+                  ),
+                ],
+              )
+            : ctrl.capturing
             ? FilledButton.icon(
                 style: FilledButton.styleFrom(backgroundColor: Colors.red),
                 onPressed: _stop,

@@ -25,7 +25,10 @@ class BrewController extends ChangeNotifier {
   final BookooBle ble;
   StreamSubscription? _sub;
 
-  BrewController(this.ble) {
+  final DateTime Function() _now;
+
+  BrewController(this.ble, {DateTime Function()? now})
+    : _now = now ?? DateTime.now {
     _sub = ble.readings.listen(_onReading);
   }
 
@@ -59,10 +62,10 @@ class BrewController extends ChangeNotifier {
       if (_timerBase != null && r.elapsedS > 0) {
         t = r.elapsedS - _timerBase!;
       } else {
-        t = DateTime.now().difference(_startWall).inMilliseconds / 1000.0;
+        t = _now().difference(_startWall).inMilliseconds / 1000.0;
       }
       if (t < 0) {
-        t = DateTime.now().difference(_startWall).inMilliseconds / 1000.0;
+        t = _now().difference(_startWall).inMilliseconds / 1000.0;
       }
       _samples.add(
         Sample(double.parse(t.toStringAsFixed(2)), r.weightG, r.flowGs),
@@ -71,13 +74,31 @@ class BrewController extends ChangeNotifier {
     notifyListeners();
   }
 
+  static const shortBrewThreshold = Duration(seconds: 30);
+
+  /// Use wall-clock age, not the scale's possibly pre-existing timer value.
+  bool get needsEarlyStopConfirmation =>
+      capturing && _now().difference(_startWall) < shortBrewThreshold;
+
+  /// Discard only the in-memory cup. Never contacts the note/inventory backend.
+  Future<void> discard() async {
+    await ble.stopTimer();
+    capturing = false;
+    _samples.clear();
+    _timerBase = null;
+    _sessionGrinder = null;
+    lastSavedNoteId = null;
+    lastResult = '本杯已放弃，未保存、未扣库存';
+    notifyListeners();
+  }
+
   /// 开始一杯：tare + 启动秤上计时器，开始采集。
   Future<void> start({String? grinder}) async {
     _sessionGrinder = grinder;
     lastSavedNoteId = null;
     _samples.clear();
-    _startEpoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    _startWall = DateTime.now();
+    _startEpoch = _now().millisecondsSinceEpoch ~/ 1000;
+    _startWall = _now();
     await ble.tareAndStartTimer();
     // 给秤一点时间清零再开采（避免把上一杯残留计入）
     await Future.delayed(const Duration(milliseconds: 300));
@@ -175,10 +196,7 @@ class BrewController extends ChangeNotifier {
               _startEpoch * 1000,
             );
       note['mt80Request'] = {
-        ...mt80Request(
-          _startEpoch * 1000,
-          DateTime.now().millisecondsSinceEpoch,
-        ),
+        ...mt80Request(_startEpoch * 1000, _now().millisecondsSinceEpoch),
         'collector': 'phone',
         'status': record == null
             ? 'unavailable'
