@@ -32,16 +32,15 @@ void main() {
     expect(connect, isNot(contains('coordination')));
   });
 
-  test(
-    'scale header and grinder state do not reintroduce reconnect controls',
-    () {
-      final main = File('lib/main.dart').readAsStringSync();
-      final panel = File('lib/mt80_panel.dart').readAsStringSync();
-      expect(main, isNot(contains('点击重连')));
-      expect(main, isNot(contains('onTap: connected ? null : _connect')));
-      expect(panel, isNot(contains('重连磨豆机')));
-      expect(panel, isNot(contains('刷新本杯研磨参数')));
-      expect(panel, isNot(contains('IconButton(')));
-    },
-  );
+  test('scale header restores tap retry without extra grinder controls', () {
+    final main = File('lib/main.dart').readAsStringSync();
+    final panel = File('lib/mt80_panel.dart').readAsStringSync();
+    expect(main, isNot(contains('点击重连')));
+    expect(main, contains("ValueKey('scale-connection-header')"));
+    expect(main, contains('Future<void> _reconnectScale()'));
+    expect(main, contains('_reconnectScale,'));
+    expect(panel, isNot(contains('重连磨豆机')));
+    expect(panel, isNot(contains('刷新本杯研磨参数')));
+    expect(panel, isNot(contains('IconButton(')));
+  });
 }

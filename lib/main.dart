@@ -762,9 +762,10 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _foreground = true, _starting = false;
+  bool _deviceSessionRequested = false, _scaleReconnecting = false;
   bool _disconnectIncomplete = false;
   int _deviceEpoch = 0;
-  Future<void>? _openingDevices;
+  Future<void>? _openingDevices, _closingDevices;
   Future<void> _deviceLane = Future.value();
   late final ble = widget.scale ?? BookooBle();
   late final BrewController ctrl = widget.controller ?? BrewController(ble);
@@ -872,24 +873,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   bool get _keepDeviceSession =>
-      ctrl.capturing || _saving || _starting || _reviewingStop;
-  bool get _wantDevices =>
-      _keepDeviceSession || (selectedSection == 1 && _foreground);
+      ctrl.capturing ||
+      _saving ||
+      _starting ||
+      _reviewingStop ||
+      _scaleReconnecting;
+  bool get _wantDevices => _keepDeviceSession || _deviceSessionRequested;
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive) return;
     _foreground = state == AppLifecycleState.resumed;
-    if (!_keepDeviceSession) {
-      if (_wantDevices) {
-        unawaited(_connect());
-      } else {
-        unawaited(_closeDevices());
-      }
+    if (state == AppLifecycleState.detached) {
+      _deviceSessionRequested = false;
+      unawaited(_closeDevices());
+      return;
+    }
+    if (_foreground && selectedSection == 1) _deviceSessionRequested = true;
+    // Keep established sessions while the app process is alive, including
+    // backgrounding. Do not start new connection attempts in the background.
+    if (_foreground && !_keepDeviceSession && _wantDevices) {
+      unawaited(_connect());
     }
   }
 
   Future<void> _closeDevices() {
     _deviceEpoch++;
+    final closing = _closingDevices;
+    if (closing != null) return closing;
     final opening = _openingDevices;
     final done = _deviceLane.then((_) async {
       _disconnectIncomplete = true;
@@ -916,11 +927,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     });
     _deviceLane = done.catchError((_) {});
-    return done;
+    return _closingDevices = done.whenComplete(() => _closingDevices = null);
+  }
+
+  Future<void> _reconnectScale() async {
+    if (_scaleReconnecting || connected || !mounted || !_foreground) return;
+    setState(() => _scaleReconnecting = true);
+    try {
+      final pending = _openingDevices;
+      if (pending != null) await pending;
+      if (!mounted || !_foreground || connected) return;
+      // Reset only our scale client, never the grinder or global scan state.
+      await ble.releaseConnection();
+      if (mounted && _foreground) await _connect();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          status = '秤暂不可用';
+          statusHint = e.toString();
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _scaleReconnecting = false);
+    }
   }
 
   Future<void> _connect() async {
-    if (!mounted || selectedSection != 1 || !_foreground) return;
+    if (!mounted || !_foreground) return;
+    if (selectedSection == 1) _deviceSessionRequested = true;
+    if (!_wantDevices) return;
     final pending = _openingDevices;
     if (pending != null) {
       await pending;
@@ -938,15 +973,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openDevices() async {
-    await _deviceLane;
+    // Reserve before yielding: a background release invalidates even an open
+    // attempt still waiting for the previous native disconnect to drain.
     final epoch = ++_deviceEpoch;
-    if (!mounted || !_wantDevices) return;
-    setState(() {
-      status = '连接设备中…';
-      statusHint = null;
-    });
+    await _deviceLane;
+    if (!mounted || !_foreground || !_wantDevices || epoch != _deviceEpoch) {
+      return;
+    }
+    if (!connected) {
+      setState(() {
+        status = '连接设备中…';
+        statusHint = null;
+      });
+    }
     try {
-      if (!mounted || !_wantDevices || epoch != _deviceEpoch) return;
+      if (!mounted || !_foreground || !_wantDevices || epoch != _deviceEpoch) {
+        return;
+      }
       final wantedGrinder = settings.mt80Enabled && isMt80(selectedGrinder);
       final grinder = () async {
         await phoneGrinder.setEnabled(wantedGrinder);
@@ -956,7 +999,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (!ble.isConnected) ble.scanAndConnect(),
         grinder,
       ], eagerError: false);
-      if (!mounted || !_wantDevices || epoch != _deviceEpoch) return;
+      if (!mounted || !_foreground || !_wantDevices || epoch != _deviceEpoch) {
+        return;
+      }
     } catch (e) {
       if (!mounted || epoch != _deviceEpoch) return;
       setState(() {
@@ -1145,7 +1190,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _start() async {
-    if (_saving || _reviewingStop || _starting || ctrl.capturing) return;
+    if (_saving ||
+        _reviewingStop ||
+        _starting ||
+        _scaleReconnecting ||
+        ctrl.capturing) {
+      return;
+    }
     _starting = true;
     try {
       if (!connected) await _connect();
@@ -1236,9 +1287,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await settings.save();
       if (!mounted) return;
       _snack(res);
-      // A saved cup ends recording, not the foreground device session.
-      // Keep both live streams for the next cup; finally still releases them
-      // when this idle page is no longer foreground/selected.
+      // A saved cup ends recording, not the app-owned device session.
+      // Keep both live streams across tabs/background for the next cup.
       if (isMt80(selectedGrinder) && ctrl.lastSavedNoteId != null) {
         setState(
           () => mt80 = Mt80Result(noteId: ctrl.lastSavedNoteId, status: 'idle'),
@@ -1300,10 +1350,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (selectedSection == 2 && index != 2) _reconcileBrewSelections();
       selectedSection = index;
     });
+    if (selectedSection == 1) _deviceSessionRequested = true;
     if (_keepDeviceSession) return;
-    if (selectedSection == 1 && _foreground) {
-      unawaited(_closeDevices().then((_) => _connect()));
-    } else {
+    if (_wantDevices) {
+      // Switching foreground tabs must not tear down a working GATT session.
+      unawaited(_connect());
+    } else if (!_foreground) {
       unawaited(_closeDevices());
     }
   }
@@ -1316,10 +1368,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         selectedGrinder = kMt80Grinder;
       }
     });
+    if (selectedSection == 1) _deviceSessionRequested = true;
     if (_keepDeviceSession) return;
-    if (selectedSection == 1 && _foreground) {
-      unawaited(_closeDevices().then((_) => _connect()));
-    } else {
+    if (_wantDevices) {
+      // Switching foreground tabs must not tear down a working GATT session.
+      unawaited(_connect());
+    } else if (!_foreground) {
       unawaited(_closeDevices());
     }
   }
@@ -1442,6 +1496,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             children: [
               InkWell(
+                key: const ValueKey('scale-connection-header'),
+                onTap: connected || _scaleReconnecting ? null : _reconnectScale,
                 onLongPress: connected ? () => ble.disconnect() : null,
                 borderRadius: BorderRadius.circular(6),
                 child: Padding(
@@ -1462,7 +1518,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              status,
+                              '${ble.deviceName ?? 'BOOKOO 秤'} · $status',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -2062,9 +2118,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       settings.rememberGrindSetting(grinder, grindSetting);
     }
     await settings.save();
-    if (mounted && !_keepDeviceSession) {
-      await _closeDevices();
-      if (mounted && selectedSection == 1 && _foreground) await _connect();
+    if (mounted && !_keepDeviceSession && _wantDevices) {
+      // Reconcile only the selected grinder; never disconnect the scale here.
+      await _connect();
     }
   }
 

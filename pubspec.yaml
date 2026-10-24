@@ -1,7 +1,7 @@
 name: bookoo_brew
 description: BOOKOO 手冲秤 → brew-guide 记录 App（BLE 连秤 + Supabase 选豆/入库）
 publish_to: 'none'
-version: 1.0.41+84
+version: 1.0.42+85
 
 environment:
   sdk: '>=3.11.0 <4.0.0'

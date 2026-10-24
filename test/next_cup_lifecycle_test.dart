@@ -27,6 +27,7 @@ class Scale extends BookooBle {
   final changes = StreamController<bool>.broadcast();
   bool live = false;
   int scans = 0, releases = 0;
+  Completer<void>? releaseGate;
   @override
   Stream<bool> get connection => changes.stream;
   @override
@@ -45,6 +46,7 @@ class Scale extends BookooBle {
   @override
   Future<void> releaseConnection() async {
     releases++;
+    if (releaseGate != null) await releaseGate!.future;
     live = false;
     changes.add(false);
   }
@@ -180,7 +182,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(scale.live, isTrue);
     expect(grinder.ready, isTrue);
-    // Entering the page deliberately drains old ownership once.
+    // Begin assertions after the first foreground connection.
     scale.releases = grinder.releases = 0;
   }
 
@@ -222,50 +224,51 @@ void main() {
     },
   );
   testWidgets(
-    'leaving saved idle brew page releases both, returning reconnects',
+    'foreground tab switches after save keep both sessions without rescanning',
     (tester) async {
       await open(tester);
       await press(tester, '开始');
       await press(tester, '结束并入库');
       await press(tester, '豆仓');
-      expect(scale.releases, 1);
-      expect(grinder.releases, 1);
-      expect(scale.live || grinder.ready, isFalse);
+      expect(scale.releases, 0);
+      expect(grinder.releases, 0);
+      expect(scale.live && grinder.ready, isTrue);
       await press(tester, '萃取');
       expect(scale.live && grinder.ready, isTrue);
-      expect(scale.scans, 2);
-      expect(grinder.connections, 2);
+      expect(scale.scans, 1);
+      expect(grinder.connections, 1);
       await cleanup(tester);
     },
   );
-  testWidgets('background after save releases devices, resume reconnects', (
-    tester,
-  ) async {
-    await open(tester);
-    await press(tester, '开始');
-    await press(tester, '结束并入库');
-    for (final state in [
-      AppLifecycleState.inactive,
-      AppLifecycleState.hidden,
-      AppLifecycleState.paused,
-    ]) {
-      tester.binding.handleAppLifecycleStateChanged(state);
-    }
-    await tester.pumpAndSettle();
-    expect(scale.live || grinder.ready, isFalse);
-    for (final state in [
-      AppLifecycleState.hidden,
-      AppLifecycleState.inactive,
-      AppLifecycleState.resumed,
-    ]) {
-      tester.binding.handleAppLifecycleStateChanged(state);
-    }
-    await tester.pumpAndSettle();
-    expect(scale.live && grinder.ready, isTrue);
-    await cleanup(tester);
-  });
   testWidgets(
-    'background during recording holds connections until save completes',
+    'background after save retains devices and resume does not rescan',
+    (tester) async {
+      await open(tester);
+      await press(tester, '开始');
+      await press(tester, '结束并入库');
+      for (final state in [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      await tester.pumpAndSettle();
+      expect(scale.live && grinder.ready, isTrue);
+      for (final state in [
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      await tester.pumpAndSettle();
+      expect(scale.live && grinder.ready, isTrue);
+      await cleanup(tester);
+    },
+  );
+  testWidgets(
+    'recording and delayed save retain connections even in background',
     (tester) async {
       await open(tester);
       await press(tester, '开始');
@@ -286,7 +289,7 @@ void main() {
       ctrl.saving!.complete();
       await tester.pumpAndSettle();
       expect(ctrl.saves, 1);
-      expect(scale.live || grinder.ready, isFalse);
+      expect(scale.live && grinder.ready, isTrue);
       for (final state in [
         AppLifecycleState.hidden,
         AppLifecycleState.inactive,
@@ -388,6 +391,101 @@ void main() {
     await press(tester, '保存');
     expect(ctrl.saves, 1);
     expect(ctrl.discards, 0);
+    expect(scale.live && grinder.ready, isTrue);
+    await cleanup(tester);
+  });
+  testWidgets(
+    'repeated stock and settings round trips before brewing retain live devices',
+    (tester) async {
+      await open(tester);
+      for (var i = 0; i < 3; i++) {
+        await press(tester, '豆仓');
+        await press(tester, '设置');
+        await press(tester, '萃取');
+        expect(scale.live && grinder.ready, isTrue);
+      }
+      expect(scale.scans, 1);
+      expect(grinder.connections, 1);
+      expect(scale.releases + grinder.releases, 0);
+      expect(ctrl.starts + ctrl.saves, 0);
+      await cleanup(tester);
+    },
+  );
+  testWidgets('temporary focus loss does not disconnect or rescan', (
+    tester,
+  ) async {
+    await open(tester);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pumpAndSettle();
+    expect(scale.live && grinder.ready, isTrue);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(scale.scans, 1);
+    expect(grinder.connections, 1);
+    expect(scale.releases + grinder.releases, 0);
+    await cleanup(tester);
+  });
+  testWidgets('grinder setting changes do not disconnect the scale', (
+    tester,
+  ) async {
+    await open(tester);
+    await press(tester, '设置');
+    await press(tester, '使用 BOOKOO MT80');
+    expect(scale.live, isTrue);
+    expect(scale.releases, 0);
+    expect(scale.scans, 1);
+    expect(grinder.ready, isFalse);
+    await press(tester, '使用 BOOKOO MT80');
+    expect(grinder.ready, isTrue);
+    expect(scale.releases, 0);
+    expect(scale.scans, 1);
+    expect(grinder.connections, 2);
+    await cleanup(tester);
+  });
+  testWidgets(
+    'manual scale header retry drains scale only and ignores repeated taps',
+    (tester) async {
+      await open(tester);
+      scale.live = false;
+      scale.changes.add(false);
+      await tester.pumpAndSettle();
+      scale.releaseGate = Completer<void>();
+      final header = find.byKey(const ValueKey('scale-connection-header'));
+      await tester.ensureVisible(header);
+      await tester.tap(header);
+      await tester.pumpAndSettle();
+      expect(scale.releases, 1);
+      expect(grinder.releases, 0);
+      expect(grinder.ready, isTrue);
+      await tester.tap(header);
+      await tester.pumpAndSettle();
+      expect(scale.releases, 1);
+      scale.releaseGate!.complete();
+      scale.releaseGate = null;
+      await tester.pumpAndSettle();
+      expect(scale.live && grinder.ready, isTrue);
+      expect(scale.scans, 2);
+      expect(grinder.connections, 1);
+      expect(grinder.releases, 0);
+      await cleanup(tester);
+    },
+  );
+  testWidgets('actual app-view exit releases both devices', (tester) async {
+    await open(tester);
+    for (final state in [
+      AppLifecycleState.inactive,
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+      AppLifecycleState.detached,
+    ]) {
+      tester.binding.handleAppLifecycleStateChanged(state);
+    }
+    await tester.pumpAndSettle();
+    expect(scale.live || grinder.ready, isFalse);
+    expect(scale.releases, 1);
+    expect(grinder.releases, 1);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
     expect(scale.live && grinder.ready, isTrue);
     await cleanup(tester);
   });
