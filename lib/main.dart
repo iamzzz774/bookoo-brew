@@ -8,6 +8,7 @@ import 'bookoo_ble.dart';
 import 'brew_controller.dart';
 import 'brewguide_api.dart';
 import 'brewguide_webview.dart';
+import 'web_cloud_config.dart';
 import 'models.dart';
 import 'settings.dart';
 import 'mt80.dart';
@@ -773,6 +774,112 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final brewGuideWebKey = GlobalKey<BrewGuideWebPaneState>();
   Settings settings = Settings();
   int selectedSection = 0;
+  bool _webConnectionReady = false, _readingWebConnection = false;
+  bool _settingsLoaded = false;
+  int _webConnectionEpoch = 0;
+  int _webVerifiedEpoch = -1;
+  String _webConnectionStatus = '等待读取网页配置';
+  String? _webSourceUrl;
+
+  void _webDocumentChanged() {
+    _webConnectionEpoch++;
+    if (!mounted || ctrl.capturing || _saving || _reviewingStop || _starting) {
+      return;
+    }
+    setState(() {
+      _webConnectionReady = false;
+      _webConnectionStatus = '等待读取网页配置';
+      beans = [];
+      selectedBean = null;
+    });
+  }
+
+  Future<void> _readWebConnection() async {
+    if (widget.api != null ||
+        !mounted ||
+        !_settingsLoaded ||
+        _readingWebConnection ||
+        ctrl.capturing ||
+        _saving ||
+        _reviewingStop ||
+        _starting) {
+      return;
+    }
+    final epoch = _webConnectionEpoch;
+    final webUrl = settings.brewGuideUrl;
+    setState(() {
+      _readingWebConnection = true;
+      _webConnectionStatus = '正在读取网页配置';
+    });
+    try {
+      final result = await brewGuideWebKey.currentState?.readCloudConfig();
+      if (!mounted ||
+          epoch != _webConnectionEpoch ||
+          webUrl != settings.brewGuideUrl ||
+          ctrl.capturing ||
+          _saving ||
+          _reviewingStop ||
+          _starting) {
+        return;
+      }
+      final config = result?.config;
+      if (result?.status != WebCloudConfigStatus.ready || config == null) {
+        setState(() {
+          _webConnectionReady = false;
+          beans = [];
+          selectedBean = null;
+          _webConnectionStatus = switch (result?.status) {
+            WebCloudConfigStatus.disabled => '请先在网页中启用 Supabase 同步',
+            WebCloudConfigStatus.missing => '请先在网页中配置 Supabase 同步',
+            _ => '未能读取网页配置，请打开豆仓网页后重试',
+          };
+        });
+        return;
+      }
+      final changed =
+          settings.supabaseUrl != config.url ||
+          settings.supabaseKey != config.key ||
+          settings.userId != config.userId;
+      final needsBeans = changed || !_webConnectionReady;
+      setState(() {
+        settings.supabaseUrl = config.url;
+        settings.supabaseKey = config.key;
+        settings.userId = config.userId;
+        _webConnectionReady = true;
+        _webSourceUrl = webUrl;
+        _webVerifiedEpoch = epoch;
+        _webConnectionStatus = '已读取网页配置';
+        if (changed) {
+          beans = [];
+          selectedBean = null;
+        }
+      });
+      if (changed) await settings.save();
+      if (mounted &&
+          needsBeans &&
+          epoch == _webConnectionEpoch &&
+          !ctrl.capturing &&
+          !_saving) {
+        unawaited(_loadBeans(reportErrors: false));
+      }
+    } catch (_) {
+      if (mounted &&
+          epoch == _webConnectionEpoch &&
+          !ctrl.capturing &&
+          !_saving) {
+        setState(() {
+          _webConnectionReady = false;
+          _webConnectionStatus = '读取网页配置未完成，请重试';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _readingWebConnection = false);
+      if (mounted && epoch != _webConnectionEpoch) {
+        unawaited(_readWebConnection());
+      }
+    }
+  }
+
   bool connected = false;
   String status = '未连接';
   String? statusHint; // 次要说明，小字显示
@@ -780,6 +887,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Bean> beans = [];
   Bean? selectedBean;
   bool loadingBeans = false;
+  Future<void>? _beanLoad;
+  (String, String, String)? _beanLoadIdentity;
+  int _beanLoadSequence = 0;
+  bool _beanLoadReportErrors = false;
   final doseCtrl = TextEditingController(text: '15');
   int waterTemp = 92;
   String? selectedDripper;
@@ -852,6 +963,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       settings = s;
+      _settingsLoaded = true;
       if (s.dosePresets.isNotEmpty) {
         doseCtrl.text = fmt(s.lastDose ?? s.dosePresets.first);
       }
@@ -865,11 +977,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           : (s.grinderPresets.isNotEmpty ? s.grinderPresets.first : null);
       grindSetting = s.grindSettingFor(selectedGrinder);
     });
-    if (s.isConfigured) {
+    if (widget.api != null && s.isConfigured) {
       unawaited(_loadBeans());
       // Historical Mac records remain readable; new cups use phone capture.
     }
     if (selectedSection == 1 && _foreground) unawaited(_connect());
+    unawaited(_readWebConnection());
   }
 
   bool get _keepDeviceSession =>
@@ -1013,7 +1126,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   BrewGuideApi? get _api =>
       widget.api ??
-      (settings.isConfigured
+      (_webConnectionReady && settings.isConfigured
           ? BrewGuideApi(
               baseUrl: settings.supabaseUrl,
               key: settings.supabaseKey,
@@ -1021,17 +1134,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             )
           : null);
 
-  Future<void> _loadBeans() async {
+  Future<void> _loadBeans({bool reportErrors = true, bool force = false}) {
     final api = _api;
     if (api == null) {
-      _snack('先在设置里填 Supabase 凭证');
-      return;
+      if (reportErrors) _snack('请先在豆仓网页中配置并启用 Supabase 同步');
+      return Future.value();
     }
-    if (!mounted) return;
+    if (!mounted) return Future.value();
+    final identity = (api.baseUrl, api.key, api.userId);
+    if (!force && _beanLoad != null && _beanLoadIdentity == identity) {
+      _beanLoadReportErrors = _beanLoadReportErrors || reportErrors;
+      return _beanLoad!;
+    }
+    final sequence = ++_beanLoadSequence;
+    _beanLoadIdentity = identity;
+    _beanLoadReportErrors = reportErrors;
+    final run = _fetchBeans(api, sequence);
+    _beanLoad = run;
+    return run.whenComplete(() {
+      if (sequence == _beanLoadSequence) {
+        _beanLoad = null;
+        _beanLoadIdentity = null;
+      }
+    });
+  }
+
+  Future<void> _fetchBeans(BrewGuideApi api, int sequence) async {
     setState(() => loadingBeans = true);
     try {
       final list = await api.listFilterBeans();
-      if (!mounted) return;
+      if (!mounted ||
+          sequence != _beanLoadSequence ||
+          (widget.api == null &&
+              (!_webConnectionReady ||
+                  api.baseUrl != settings.supabaseUrl ||
+                  api.key != settings.supabaseKey ||
+                  api.userId != settings.userId))) {
+        return;
+      }
       setState(() {
         beans = list;
         if (list.isNotEmpty &&
@@ -1045,9 +1185,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       });
     } catch (e) {
-      if (mounted) _snack('$e');
+      if (mounted && sequence == _beanLoadSequence && _beanLoadReportErrors) {
+        _snack(e is TimeoutException ? '读取豆子超时，请稍后刷新' : '暂时无法读取豆子，请稍后刷新');
+      }
     } finally {
-      if (mounted) setState(() => loadingBeans = false);
+      if (mounted && sequence == _beanLoadSequence) {
+        setState(() => loadingBeans = false);
+      }
     }
   }
 
@@ -1190,6 +1334,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _start() async {
+    if (widget.api == null &&
+        (!_webConnectionReady ||
+            _readingWebConnection ||
+            _webVerifiedEpoch != _webConnectionEpoch)) {
+      unawaited(_readWebConnection());
+      _snack(_webConnectionStatus);
+      return;
+    }
     if (_saving ||
         _reviewingStop ||
         _starting ||
@@ -1255,7 +1407,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     final api = _api;
     if (api == null) {
-      _snack('先在设置里填 Supabase 凭证');
+      _snack('请先在豆仓网页中配置并启用 Supabase 同步');
       return;
     }
     final dose =
@@ -1295,7 +1447,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
         unawaited(_refreshMt80());
       }
-      unawaited(_loadBeans()); // 刷新余量
+      unawaited(_loadBeans(reportErrors: false, force: true)); // 刷新余量
     } catch (e) {
       if (mounted) _snack('入库失败：$e');
     } finally {
@@ -1350,6 +1502,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (selectedSection == 2 && index != 2) _reconcileBrewSelections();
       selectedSection = index;
     });
+    if (index == 1 || index == 2) unawaited(_readWebConnection());
     if (selectedSection == 1) _deviceSessionRequested = true;
     if (_keepDeviceSession) return;
     if (_wantDevices) {
@@ -1362,6 +1515,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _settingsSaved() {
     if (!mounted) return;
+    if (_webSourceUrl != settings.brewGuideUrl) _webDocumentChanged();
     setState(() {
       _reconcileBrewSelections();
       if (settings.mt80Enabled && settings.lastGrinder == kMt80Grinder) {
@@ -1407,6 +1561,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               BrewGuideWebPane(
                 key: brewGuideWebKey,
                 url: settings.brewGuideUrl,
+                onReady: () => unawaited(_readWebConnection()),
+                onDocumentChanged: _webDocumentChanged,
               ),
               _compactNativeTypography(_brewPane()),
               _compactNativeTypography(
@@ -1417,6 +1573,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   onThemePreferenceChanged: widget.onThemePreferenceChanged,
                   onSaved: _settingsSaved,
                   embedded: true,
+                  useWebConnection: true,
+                  webConnectionStatus: _webConnectionStatus,
                 ),
               ),
             ],
@@ -2641,6 +2799,8 @@ class SettingsScreen extends StatefulWidget {
   final ValueChanged<AppThemePreference>? onThemePreferenceChanged;
   final VoidCallback? onSaved;
   final bool embedded;
+  final bool useWebConnection;
+  final String webConnectionStatus;
 
   const SettingsScreen({
     super.key,
@@ -2649,6 +2809,8 @@ class SettingsScreen extends StatefulWidget {
     this.onThemePreferenceChanged,
     this.onSaved,
     this.embedded = false,
+    this.useWebConnection = false,
+    this.webConnectionStatus = '等待读取网页配置',
   });
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -2667,6 +2829,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _obscureSupabaseKey = true;
 
   void _applyConnectionFields() {
+    if (widget.useWebConnection) {
+      widget.settings.brewGuideUrl = brewGuideUrlCtrl.text.trim();
+      return;
+    }
     widget.settings
       ..brewGuideUrl = brewGuideUrlCtrl.text.trim()
       ..supabaseUrl = urlCtrl.text.trim()
@@ -3217,6 +3383,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _connectionSettingsSection() {
     final colors = Theme.of(context).colorScheme;
+    if (widget.useWebConnection) {
+      return _settingsSection(
+        key: const ValueKey('settings-group-connection'),
+        title: '数据连接',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '使用网页配置',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              widget.webConnectionStatus,
+              key: const ValueKey('web-connection-status'),
+              style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            _connectionField(
+              key: const ValueKey('brew-guide-url-field'),
+              label: 'Brew Guide 网址',
+              controller: brewGuideUrlCtrl,
+              hintText: 'https://your-brew-guide.example/',
+            ),
+          ],
+        ),
+      );
+    }
     final configured = widget.settings.isConfigured;
     final groupDecoration = BoxDecoration(
       color: _settingsGroupColor(context),

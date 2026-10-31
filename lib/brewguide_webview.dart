@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import 'web_download_bridge.dart';
+import 'web_cloud_config.dart';
 
 /// Only an explicit, credential-free HTTPS URL can establish a trust boundary.
 Uri? parseBrewGuideUrl(String value) {
@@ -87,9 +88,16 @@ const String kAdjustEmbeddedLayoutScript = r'''
 
 /// 内嵌 Brew Guide。控制器只创建一次，因此切换到萃取页后网页状态仍保留。
 class BrewGuideWebPane extends StatefulWidget {
-  const BrewGuideWebPane({super.key, required this.url});
+  const BrewGuideWebPane({
+    super.key,
+    required this.url,
+    this.onReady,
+    this.onDocumentChanged,
+  });
 
   final String url;
+  final VoidCallback? onReady;
+  final VoidCallback? onDocumentChanged;
 
   @override
   State<BrewGuideWebPane> createState() => BrewGuideWebPaneState();
@@ -107,6 +115,79 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
   String? _mainFrameError;
   String _currentUrl = '';
   String _downloadToken = '';
+  Completer<WebCloudConfigResult?>? _cloudRead;
+  String _cloudToken = '', _cloudRequestId = '';
+
+  Future<WebCloudConfigResult?> readCloudConfig() async {
+    final existing = _cloudRead;
+    if (existing != null) return existing.future;
+    final generation = _generation;
+    final document = _documentGeneration;
+    final controller = _controller;
+    if (controller == null ||
+        !await _isCurrentDocumentTrusted() ||
+        !_isActive(generation) ||
+        document != _documentGeneration) {
+      return null;
+    }
+    if (_cloudRead != null) return _cloudRead!.future;
+    final origin = parseBrewGuideUrl(widget.url)!.origin;
+    final pending = Completer<WebCloudConfigResult?>();
+    _cloudRead = pending;
+    _cloudToken = base64UrlEncode(
+      List<int>.generate(32, (_) => Random.secure().nextInt(256)),
+    ).replaceAll('=', '');
+    _cloudRequestId = base64UrlEncode(
+      List<int>.generate(16, (_) => Random.secure().nextInt(256)),
+    ).replaceAll('=', '');
+    try {
+      await controller
+          .runJavaScript(
+            webCloudConfigReadScript(
+              origin: origin,
+              token: _cloudToken,
+              requestId: _cloudRequestId,
+            ),
+          )
+          .timeout(const Duration(seconds: 5));
+      return await pending.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
+    } catch (_) {
+      return null;
+    } finally {
+      if (identical(_cloudRead, pending)) {
+        _cloudRead = null;
+        _cloudToken = '';
+        _cloudRequestId = '';
+      }
+      if (!pending.isCompleted) pending.complete(null);
+    }
+  }
+
+  Future<void> _handleCloudConfigMessage(String raw) async {
+    final pending = _cloudRead;
+    final generation = _generation;
+    final document = _documentGeneration;
+    final origin = parseBrewGuideUrl(widget.url)?.origin;
+    if (pending == null || pending.isCompleted || origin == null) return;
+    final result = parseWebCloudConfigMessage(
+      raw,
+      origin: origin,
+      token: _cloudToken,
+      requestId: _cloudRequestId,
+    );
+    if (result == null ||
+        !await _isCurrentDocumentTrusted() ||
+        !_isActive(generation) ||
+        document != _documentGeneration ||
+        !identical(pending, _cloudRead) ||
+        pending.isCompleted) {
+      return;
+    }
+    pending.complete(result);
+  }
 
   @override
   void initState() {
@@ -123,6 +204,14 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
   bool _isActive(int generation) => mounted && generation == _generation;
 
   void _invalidateDocument() {
+    final pending = _cloudRead;
+    _cloudRead = null;
+    _cloudToken = '';
+    _cloudRequestId = '';
+    if (pending != null && !pending.isCompleted) pending.complete(null);
+    scheduleMicrotask(() {
+      if (mounted) widget.onDocumentChanged?.call();
+    });
     _documentGeneration++;
     _downloadAssembler.clear();
     _downloadToken = '';
@@ -156,6 +245,14 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
             },
           )
           ..setJavaScriptMode(JavaScriptMode.unrestricted)
+          ..addJavaScriptChannel(
+            kWebCloudConfigChannel,
+            onMessageReceived: (message) {
+              if (_isActive(generation)) {
+                unawaited(_handleCloudConfigMessage(message.message));
+              }
+            },
+          )
           ..addJavaScriptChannel(
             kWebDownloadChannelName,
             onMessageReceived: (message) {
@@ -234,7 +331,12 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
     if (controller == null || !_isTrustedBrewGuideUrl(_currentUrl)) {
       return false;
     }
-    final url = await controller.currentUrl();
+    String? url;
+    try {
+      url = await controller.currentUrl().timeout(const Duration(seconds: 3));
+    } catch (_) {
+      return false;
+    }
     return _isActive(generation) &&
         document == _documentGeneration &&
         url != null &&
@@ -262,6 +364,11 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
       await controller.runJavaScript(
         brewGuidePageScript(widget.url, _downloadToken),
       );
+      if (_isActive(generation) &&
+          document == _documentGeneration &&
+          await _isCurrentDocumentTrusted()) {
+        widget.onReady?.call();
+      }
     } catch (_) {
       // A refresh can race script injection; the next completed page retries.
     }
