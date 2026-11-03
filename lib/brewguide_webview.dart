@@ -86,6 +86,22 @@ const String kAdjustEmbeddedLayoutScript = r'''
 })();
 ''';
 
+/// Keep Android's scrolling WebView in its native view hierarchy rather than
+/// the default texture-layer path. Other platforms keep their default params.
+PlatformWebViewWidgetCreationParams brewGuideWebViewCreationParams(
+  WebViewController controller,
+) {
+  final params = PlatformWebViewWidgetCreationParams(
+    controller: controller.platform,
+  );
+  return controller.platform is AndroidWebViewController
+      ? AndroidWebViewWidgetCreationParams.fromPlatformWebViewWidgetCreationParams(
+          params,
+          displayWithHybridComposition: true,
+        )
+      : params;
+}
+
 /// 内嵌 Brew Guide。控制器只创建一次，因此切换到萃取页后网页状态仍保留。
 class BrewGuideWebPane extends StatefulWidget {
   const BrewGuideWebPane({
@@ -108,6 +124,7 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
     'coffee.bookoo.bookoo_brew/file_picker',
   );
   WebViewController? _controller;
+  Widget? _webView;
   final WebDownloadAssembler _downloadAssembler = WebDownloadAssembler();
   int _generation = 0;
   int _documentGeneration = 0;
@@ -222,6 +239,7 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
     final generation = ++_generation;
     _invalidateDocument();
     _controller = null;
+    _webView = null;
     _currentUrl = '';
     _progress = 0;
     _mainFrameError = null;
@@ -318,6 +336,12 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
         return _pickFiles(params);
       });
     }
+    // Retain the widget as well as the controller: progress/config callbacks
+    // must not rebuild the native platform-view subtree while the user scrolls.
+    _webView = WebViewWidget.fromPlatformCreationParams(
+      key: ValueKey('brew-guide-webview-$generation'),
+      params: brewGuideWebViewCreationParams(controller),
+    );
     unawaited(controller.loadRequest(uri));
   }
 
@@ -529,13 +553,7 @@ class BrewGuideWebPaneState extends State<BrewGuideWebPane> {
       child: Stack(
         children: [
           Positioned.fill(
-            child: Semantics(
-              label: 'Brew Guide 豆仓、统计和笔记',
-              child: WebViewWidget(
-                key: ValueKey('brew-guide-webview-$_generation'),
-                controller: controller,
-              ),
-            ),
+            child: Semantics(label: 'Brew Guide 豆仓、统计和笔记', child: _webView!),
           ),
           if (_progress < 100 && _mainFrameError == null)
             Positioned(

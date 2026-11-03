@@ -774,6 +774,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final brewGuideWebKey = GlobalKey<BrewGuideWebPaneState>();
   Settings settings = Settings();
   int selectedSection = 0;
+  // Keep collecting live device data across tabs, but don't rebuild an
+  // offscreen chart/panel for every BLE sample while the WebView is scrolling.
+  static final Listenable _noLiveUi = Listenable.merge(const []);
   bool _webConnectionReady = false, _readingWebConnection = false;
   bool _settingsLoaded = false;
   int _webConnectionEpoch = 0;
@@ -1614,7 +1617,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .clamp(190.0, 400.0)
           .toDouble();
       return ListenableBuilder(
-        listenable: ctrl,
+        listenable: selectedSection == 1 ? ctrl : _noLiveUi,
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
           children: [
@@ -1784,7 +1787,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(height: 4),
           if (isMt80(selectedGrinder)) ...[
             AnimatedBuilder(
-              animation: phoneGrinder,
+              animation: selectedSection == 1 ? phoneGrinder : _noLiveUi,
               builder: (_, __) => Mt80GrindPanel(
                 result: mt80,
                 loading: mt80Loading,

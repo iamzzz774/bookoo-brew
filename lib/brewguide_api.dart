@@ -94,34 +94,64 @@ class BrewGuideApi {
 
   /// 列出在用的手冲豆（beanType=filter 且 remaining>0），按烘焙日期从早到晚。
   Future<List<Bean>> listFilterBeans() async {
-    final lightUrl =
-        '$_rest/coffee_beans?deleted_at=is.null&user_id=eq.$userId'
-        '&select=id,data&order=updated_at.desc&limit=80';
-    final resp = await http
-        .get(Uri.parse(lightUrl), headers: _headers)
-        .timeout(requestTimeout);
-    if (resp.statusCode >= 300) {
-      throw Exception('查询豆子失败 HTTP ${resp.statusCode}: ${resp.body}');
-    }
-    final rows = jsonDecode(utf8.decode(resp.bodyBytes)) as List;
+    // Never fetch whole data blobs here: bean images can make a tiny picker
+    // require megabytes. Inventory writes independently read fresh full rows.
+    const projection =
+        'id,name:data->>name,roastLevel:data->>roastLevel,'
+        'roaster:data->>roaster,roastDate:data->>roastDate,'
+        'remaining:data->>remaining,process:data->>process,'
+        'componentProcess:data->blendComponents->0->>process';
+    const pageSize = 80;
     final beans = <Bean>[];
-    for (final row in rows) {
-      final data = (row['data'] as Map?)?.cast<String, dynamic>() ?? {};
-      if (data['beanType'] != 'filter') continue;
-      final remaining = parseGrams(data['remaining']);
-      if (remaining <= 0) continue;
-      beans.add(
-        Bean(
-          id: row['id'].toString(),
-          name: (data['name'] ?? '').toString(),
-          roastLevel: (data['roastLevel'] ?? '').toString(),
-          roaster: data['roaster']?.toString(),
-          roastDate: data['roastDate']?.toString(),
-          process: _extractProcess(data),
-          remaining: remaining,
-          raw: data,
-        ),
-      );
+    final seen = <String>{};
+    var offset = 0;
+    while (true) {
+      final rows = await _beanRows('coffee_beans', {
+        'select': projection,
+        'data->>beanType': 'eq.filter',
+        'order': 'updated_at.desc,id.asc',
+        'limit': '$pageSize',
+        'offset': '$offset',
+      });
+      if (rows.isEmpty) break;
+      var newIds = 0;
+      for (final row in rows) {
+        if (row['id'] is! String || (row['id'] as String).isEmpty) {
+          throw const FormatException('咖啡豆数据不完整');
+        }
+        final id = row['id'] as String;
+        if (!seen.add(id)) continue;
+        newIds++;
+        final remaining = parseGrams(row['remaining']);
+        if (!remaining.isFinite || remaining <= 0) continue;
+        final component = row['componentProcess'];
+        final process = component is String && component.trim().isNotEmpty
+            ? component.trim()
+            : row['process']?.toString();
+        beans.add(
+          Bean(
+            id: id,
+            name: (row['name'] ?? '').toString(),
+            roastLevel: (row['roastLevel'] ?? '').toString(),
+            roaster: row['roaster']?.toString(),
+            roastDate: row['roastDate']?.toString(),
+            process: process,
+            remaining: remaining,
+            raw: {
+              'beanType': 'filter',
+              'name': row['name'],
+              'roastLevel': row['roastLevel'],
+              'roaster': row['roaster'],
+              'roastDate': row['roastDate'],
+              'remaining': row['remaining'],
+              'process': process,
+            },
+          ),
+        );
+      }
+      if (newIds == 0) throw const FormatException('咖啡豆分页未推进');
+      // Continue until empty, including if the backend caps pages below 80.
+      offset += rows.length;
     }
     sortBeansForDisplay(beans);
     return beans;
@@ -150,18 +180,6 @@ class BrewGuideApi {
     final month = m.group(2)!.padLeft(2, '0');
     final day = m.group(3)!.padLeft(2, '0');
     return DateTime.tryParse('$year-$month-$day');
-  }
-
-  /// 提取处理法：优先 blendComponents[0].process，退到顶层 process。
-  static String? _extractProcess(Map<String, dynamic> data) {
-    final bc = data['blendComponents'];
-    if (bc is List && bc.isNotEmpty && bc.first is Map) {
-      final p = (bc.first as Map)['process'];
-      if (p is String && p.trim().isNotEmpty) return p.trim();
-    }
-    final top = data['process'];
-    if (top is String && top.trim().isNotEmpty) return top.trim();
-    return null;
   }
 
   /// upsert 一条手冲笔记到 brewing_notes。幂等（note['id'] 确定性）。
